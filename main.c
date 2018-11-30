@@ -187,7 +187,7 @@
 #define SX127X_REG_AGCTHRESH2											0x63
 #define SX127X_REG_AGCTHRESH3											0x64
 #define SX127X_REG_PLL													0x70
-
+#define DEBUG
 static int devmajor;
 static struct class *devclass;
 
@@ -1052,11 +1052,14 @@ static void sx127x_irq_work_handler(struct work_struct *work){
 }
 
 static int sx127x_probe(struct spi_device *spi){
+		printk("fPROBING\n");
 	int ret = 0;
 	struct sx127x *data;
 	u8 version;
 	int irq;
 	unsigned minor;
+
+
 
 	// allocate all of the crap we need
 	data = kmalloc(sizeof(*data), GFP_KERNEL);
@@ -1084,26 +1087,89 @@ static int sx127x_probe(struct spi_device *spi){
 	}
 
 	// get the reset gpio and reset the chip
-	data->gpio_reset = devm_gpiod_get(&spi->dev, "reset", GPIOD_OUT_LOW);
+	/*data->gpio_reset = devm_gpiod_get(&spi->dev, "reset", GPIOD_OUT_LOW);
 	if(IS_ERR(data->gpio_reset)){
 		dev_err(&spi->dev, "reset gpio is required");
 		ret = -ENOMEM;
 		goto err_resetgpio;
-	}
+	}*/
+
+/*
+
+	u32	save = spi->max_speed_hz;
+	int requestSpeed = 500000;
+	spi->max_speed_hz = requestSpeed;
+        spi->bits_per_word = 8;
+	spi->mode = 0;
+
+	spi->chip_select = 0;
+	spi->max_speed_hz = 5000000;
+	spi->mode = SPI_MODE_0;
+	spi->bits_per_word = 8;
+	spi->irq = -1;
+
+
+	//ret = spi_setup(spi);
+
+
+
+	if (ret == 0)
+        {
+		printk("SUCCESSSSS \n");
+	printk("spi->max_speed_hz : %d \n", spi->max_speed_hz);
+	printk("spi->bits_per_word : %d \n", spi->bits_per_word);
+	printk("spi->mode : %d \n", spi->mode);
+	printk("spi->chip_select : %d \n", spi->chip_select);
+	printk("spi->irq : %d \n", spi->irq);
+	printk("spi->cs_gpio : %d \n", spi->cs_gpio);
+
+        }
+	else
+		printk(&spi->dev, "%d Hz (max)\n", requestSpeed);
+
+        spi_dev_put(spi);
+
+
+*/
+        data->gpio_reset = gpio_to_desc(17);
+
+if (gpiod_direction_output(data->gpio_reset, 0))
+{
+		dev_err(&spi->dev, "unknown GPIO RST");
+}
 
 	gpiod_set_value(data->gpio_reset, 1);
 	mdelay(100);
 	gpiod_set_value(data->gpio_reset, 0);
 	mdelay(100);
+	gpiod_set_value(data->gpio_reset, 1);
+	mdelay(100);
 
 	// get the rev from the chip and check it's what we expect
-	sx127x_reg_read(spi, SX127X_REG_VERSION, &version);
+	if (sx127x_reg_read(spi, SX127X_REG_VERSION, &version) != 0)
+        {
+		dev_err(&spi->dev, "Cant read register", version);
+		ret = -EINVAL;
+        }
 	if(version != 0x12){
 		dev_err(&spi->dev, "unknown chip version %x\n", version);
 		ret = -EINVAL;
-		goto err_chipid;
 	}
 	dev_warn(&spi->dev, "chip version %x\n",(unsigned) version);
+
+
+	// get the rev from the chip and check it's what we expect
+	if (sx127x_reg_read(spi, SX127X_REG_VERSION, &version) != 0)
+        {
+		dev_err(&spi->dev, "Cant read register", version);
+		ret = -EINVAL;
+        }
+	if(version != 0x12){
+		dev_err(&spi->dev, "unknown chip version %x\n", version);
+		ret = -EINVAL;
+	}
+	dev_warn(&spi->dev, "chip version %x\n",(unsigned) version);
+
 
 	// get the other optional gpios
 	data->gpio_txen = devm_gpiod_get_index(&spi->dev, "txrxswitch", 0, GPIOD_OUT_LOW);
@@ -1195,7 +1261,7 @@ static int sx127x_remove(struct spi_device *spi){
 
 static const struct of_device_id sx127x_of_match[] = {
 	{
-		.compatible = "semtech, sx127x",
+		.compatible = "sx127x",
 	},
 	{ },
 };
@@ -1212,9 +1278,23 @@ static struct spi_driver sx127x_driver = {
 	},
 };
 
+
+static struct spi_board_info helloWorld_2_spi_device_info = {
+
+		.modalias = SX127X_DRIVERNAME,
+                .max_speed_hz = 500000,
+                .bus_num = 1,
+		.chip_select = 0,
+                .mode = SPI_MODE_0,
+
+};
+
+static struct spi_device *spi;
+
 static int __init sx127x_init(void)
 {
 	int ret;
+
 	ret = register_chrdev(0, SX127X_DRIVERNAME, &fops);
 	if(ret < 0){
 		printk("failed to register char device\n");
@@ -1236,6 +1316,29 @@ static int __init sx127x_init(void)
 		goto out2;
 	}
 
+	struct spi_controller *master = spi_busnum_to_master( 1 );
+	if (!master )
+	{
+		printk( KERN_ALERT "spi_busnum_to_master(%d) returned NULL\n", 0 );
+		goto out2;
+	}
+	spi = spi_new_device( master, &helloWorld_2_spi_device_info );
+	if ( !spi ) 
+	{
+		put_device( &master->dev );
+		printk( KERN_ALERT "spi_alloc_device() failed\n" );
+		goto out2;
+	}
+
+	spi->chip_select = 0;
+	spi->max_speed_hz = 500000;
+	spi->mode = SPI_MODE_0;
+	spi->bits_per_word = 8;
+	spi->irq = -1;
+	strlcpy( spi->modalias, SX127X_DRIVERNAME, strlen(SX127X_DRIVERNAME) );
+
+	put_device( &master->dev );
+
 	goto out;
 
 	out2:
@@ -1249,6 +1352,8 @@ module_init(sx127x_init);
 
 static void __exit sx127x_exit(void)
 {
+	printk("Exiting...\n");
+
 	spi_unregister_driver(&sx127x_driver);
 	unregister_chrdev(devmajor, SX127X_DRIVERNAME);
 	class_destroy(devclass);
