@@ -201,7 +201,7 @@ struct sx127x {
 	struct device *chardevice;
 	struct work_struct irq_work;
 	struct spi_device* spidevice;
-	struct gpio_desc *gpio_reset, *gpio_txen, *gpio_rxen;
+	struct gpio_desc *gpio_reset,*gpio_interrupt, *gpio_txen, *gpio_rxen;
 	u32 fosc;
 	enum sx127x_pa pa;
 	struct mutex mutex;
@@ -987,6 +987,7 @@ static struct file_operations fops = {
 
 static irqreturn_t sx127x_irq(int irq, void *dev_id)
 {
+	//printk("irq");	
 	struct sx127x *data = dev_id;
 	schedule_work(&data->irq_work);
 	return IRQ_HANDLED;
@@ -1183,7 +1184,7 @@ if (gpiod_direction_output(data->gpio_reset, 0))
 		dev_warn(&spi->dev, "no rx enable\n");
 		data->gpio_rxen = NULL;
 	}
-
+/*
 	// get the irq
 	irq = irq_of_parse_and_map(spi->dev.of_node, 0);
 	if (!irq) {
@@ -1192,7 +1193,24 @@ if (gpiod_direction_output(data->gpio_reset, 0))
 		goto err_irq;
 	}
 	devm_request_irq(&spi->dev, irq, sx127x_irq, 0, SX127X_DRIVERNAME, data);
+*/
 
+        data->gpio_interrupt = gpio_to_desc(23);
+
+	if (gpiod_direction_input(data->gpio_interrupt))
+	{
+                dev_err(&spi->dev, "unknown GPIO interrupt");
+	}
+
+
+	if (ret = request_irq(gpiod_to_irq(data->gpio_interrupt), sx127x_irq,
+                      IRQF_TRIGGER_RISING,
+                      "sx127x_Int", data))
+	{
+		dev_err(&spi->dev, "request_irq failed");	
+
+	}
+	
 	// create the frontend device and stash it in the spi device
 	mutex_lock(&device_list_lock);
 	minor = 0;
@@ -1220,6 +1238,9 @@ if (gpiod_direction_output(data->gpio_reset, 0))
 	ret = device_create_file(data->chardevice, &dev_attr_codingrate);
 	ret = device_create_file(data->chardevice, &dev_attr_implicitheadermodeon);
 
+
+	sx127x_setmodulation(data,SX127X_MODULATION_LORA);
+	sx127x_setopmode(data,SX127X_OPMODE_RXCONTINUOS,true);	
 	return 0;
 
 	err_sysfs:
@@ -1250,7 +1271,7 @@ static int sx127x_remove(struct spi_device *spi){
 	device_remove_file(data->chardevice, &dev_attr_bw);
 	device_remove_file(data->chardevice, &dev_attr_codingrate);
 	device_remove_file(data->chardevice, &dev_attr_implicitheadermodeon);
-
+        free_irq(gpiod_to_irq(data->gpio_interrupt),data);
 	device_destroy(devclass, data->devt);
 
 	kfifo_free(&data->out);
