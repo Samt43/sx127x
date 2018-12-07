@@ -199,9 +199,9 @@ static const char* paoutput[] = {"rfo", "pa_boost"};
 
 struct sx127x {
 	struct device *chardevice;
-	struct work_struct irq_work;
+	struct work_struct irq_work,irq_timeout_work;
 	struct spi_device* spidevice;
-	struct gpio_desc *gpio_reset,*gpio_interrupt, *gpio_txen, *gpio_rxen;
+	struct gpio_desc *gpio_reset,*gpio_interrupt,*gpio_interrupt_timeout, *gpio_txen, *gpio_rxen;
 	u32 fosc;
 	enum sx127x_pa pa;
 	struct mutex mutex;
@@ -448,7 +448,7 @@ static ssize_t sx127x_opmode_show(struct device *child, struct device_attribute 
 }
 
 static int sx127x_toggletxrxen(struct sx127x *data, bool tx){
-	if(data->gpio_txen){
+/*	if(data->gpio_txen){
 		if(tx){
 			dev_warn(data->chardevice, "enabling tx\n");
 		}
@@ -460,29 +460,34 @@ static int sx127x_toggletxrxen(struct sx127x *data, bool tx){
 		}
 		gpiod_set_value(data->gpio_rxen, !tx);
 	}
+
+
+*/
 	return 0;
+
+
 }
 
 static int sx127x_setopmode(struct sx127x *data, enum sx127x_opmode mode, bool retain){
-	u8 opmode, diomapping1;
-	int ret = sx127x_reg_read(data->spidevice, SX127X_REG_OPMODE, &opmode);
-	if(mode < SX127X_OPMODE_SLEEP || mode > SX127X_OPMODE_CAD){
-		ret = -EINVAL;
-		dev_err(data->chardevice, "invalid opmode\n");
-	}
-	else if((opmode & SX127X_REG_OPMODE_LONGRANGEMODE) && (mode == SX127X_OPMODE_RX)){
-		dev_err(data->chardevice, "opmode %s not valid in LoRa mode\n", opmodestr[mode]);
-	}
-	else if(!(opmode & SX127X_REG_OPMODE_LONGRANGEMODE) && (mode > SX127X_OPMODE_RX)) {
-		dev_err(data->chardevice, "opmode %s not valid in FSK/OOK mode\n", opmodestr[mode]);
-	}
-	else {
+	u8 opmode, diomapping1=0;
+//	int ret = sx127x_reg_read(data->spidevice, SX127X_REG_OPMODE, &opmode);
+//	if(mode < SX127X_OPMODE_SLEEP || mode > SX127X_OPMODE_CAD){
+//		ret = -EINVAL;
+//		dev_err(data->chardevice, "invalid opmode\n");
+//	}
+//	else if((opmode & SX127X_REG_OPMODE_LONGRANGEMODE) && (mode == SX127X_OPMODE_RX)){
+//		dev_err(data->chardevice, "opmode %s not valid in LoRa mode\n", opmodestr[mode]);
+//	}
+//	else if(!(opmode & SX127X_REG_OPMODE_LONGRANGEMODE) && (mode > SX127X_OPMODE_RX)) {
+//		dev_err(data->chardevice, "opmode %s not valid in FSK/OOK mode\n", opmodestr[mode]);
+//²	}
+//	else {
 		if(retain){
 					data->opmode = mode;
 		}
-		dev_warn(data->chardevice, "setting opmode to %s\n", opmodestr[mode]);
-		sx127x_reg_read(data->spidevice, SX127X_REG_DIOMAPPING1, &diomapping1);
-		diomapping1 &= ~SX127X_REG_DIOMAPPING1_DIO0;
+//		dev_warn(data->chardevice, "setting opmode to %s\n", opmodestr[mode]);
+//		sx127x_reg_read(data->spidevice, SX127X_REG_DIOMAPPING1, &diomapping1);
+//		diomapping1 &= ~SX127X_REG_DIOMAPPING1_DIO0;
 		switch(mode){
 		case SX127X_OPMODE_CAD:
 			diomapping1 |= SX127X_REG_DIOMAPPING1_DIO0_CADDONE;
@@ -511,8 +516,8 @@ static int sx127x_setopmode(struct sx127x *data, enum sx127x_opmode mode, bool r
 		opmode |= mode;
 		sx127x_reg_write(data->spidevice, SX127X_REG_DIOMAPPING1, diomapping1);
 		sx127x_reg_write(data->spidevice, SX127X_REG_OPMODE, opmode);
-	}
-	return ret;
+	//}
+	return 0;
 }
 
 static int sx127x_setsyncword(struct sx127x *data, u8 syncword){
@@ -992,13 +997,33 @@ static struct file_operations fops = {
 		.unlocked_ioctl = sx127x_dev_ioctl
 };
 
+
+
+static irqreturn_t sx127x_irq_timeout(int irq, void *dev_id)
+{
+        struct sx127x *data = dev_id;
+        schedule_work(&data->irq_timeout_work);
+        return IRQ_HANDLED;
+}
+
+
 static irqreturn_t sx127x_irq(int irq, void *dev_id)
 {
-	//printk("irq");	
 	struct sx127x *data = dev_id;
 	schedule_work(&data->irq_work);
 	return IRQ_HANDLED;
 }
+
+
+static void sx127x_irq_timeout_work_handler(struct work_struct *work){
+        struct sx127x *data = container_of(work, struct sx127x, irq_timeout_work);
+        u8 irqflags, buf[256], len, snr, rssi;
+
+        dev_warn(data->chardevice, "Timeout\n");
+
+
+}
+
 
 static void sx127x_irq_work_handler(struct work_struct *work){
 	struct sx127x *data = container_of(work, struct sx127x, irq_work);
@@ -1007,6 +1032,7 @@ static void sx127x_irq_work_handler(struct work_struct *work){
 	struct sx127x_pkt pkt;
 	mutex_lock(&data->mutex);
 	sx127x_reg_read(data->spidevice, SX127X_REG_LORA_IRQFLAGS, &irqflags);
+        sx127x_reg_write(data->spidevice, SX127X_REG_LORA_IRQFLAGS, 0xff);
 	if(irqflags & SX127X_REG_LORA_IRQFLAGS_RXDONE){
 		dev_warn(data->chardevice, "reading packet\n");
 		memset(&pkt, 0, sizeof(pkt));
@@ -1046,16 +1072,20 @@ static void sx127x_irq_work_handler(struct work_struct *work){
 	}
 	else if(irqflags & SX127X_REG_LORA_IRQFLAGS_CADDONE){
 		if(irqflags & SX127X_REG_LORA_IRQFLAGS_CADDETECTED){
-			dev_info(data->chardevice, "CAD done, detected activity\n");
+			//dev_info(data->chardevice, "CAD done, detected activity\n");
+		
+                   sx127x_setopmode(data, SX127X_OPMODE_RXSINGLE, false);
 		}
 		else {
-			dev_info(data->chardevice, "CAD done, nothing detected\n");
+	// TODO : Change SF	
+                   sx127x_setopmode(data, SX127X_OPMODE_CAD, false);
+                   //dev_info(data->chardevice, "CAD done, nothing detected\n");
 		}
 	}
 	else {
 		dev_err(&data->spidevice->dev, "unhandled interrupt state %02x\n", (unsigned) irqflags);
 	}
-	sx127x_reg_write(data->spidevice, SX127X_REG_LORA_IRQFLAGS, 0xff);
+	//sx127x_reg_write(data->spidevice, SX127X_REG_LORA_IRQFLAGS, 0xff);
 	mutex_unlock(&data->mutex);
 }
 
@@ -1078,7 +1108,8 @@ static int sx127x_probe(struct spi_device *spi){
 	}
 
 	data->open = 0;
-	INIT_WORK(&data->irq_work, sx127x_irq_work_handler);
+        INIT_WORK(&data->irq_timeout_work, sx127x_irq_timeout_work_handler);
+        INIT_WORK(&data->irq_work, sx127x_irq_work_handler);
 	INIT_LIST_HEAD(&data->device_entry);
 	init_waitqueue_head(&data->readwq);
 	init_waitqueue_head(&data->writewq);
@@ -1202,17 +1233,37 @@ if (gpiod_direction_output(data->gpio_reset, 0))
 	devm_request_irq(&spi->dev, irq, sx127x_irq, 0, SX127X_DRIVERNAME, data);
 */
 
+
         data->gpio_interrupt = gpio_to_desc(23);
 
-	if (gpiod_direction_input(data->gpio_interrupt))
+        if (gpiod_direction_input(data->gpio_interrupt))
+        {
+                dev_err(&spi->dev, "unknown GPIO interrupt");
+        }
+
+
+        if (ret = request_irq(gpiod_to_irq(data->gpio_interrupt), sx127x_irq,
+                      IRQF_TRIGGER_RISING,
+                      "sx127x_Int", data))
+        {
+                dev_err(&spi->dev, "request_irq failed");
+
+        }
+
+
+
+
+        data->gpio_interrupt_timeout = gpio_to_desc(22);
+
+	if (gpiod_direction_input(data->gpio_interrupt_timeout))
 	{
                 dev_err(&spi->dev, "unknown GPIO interrupt");
 	}
 
 
-	if (ret = request_irq(gpiod_to_irq(data->gpio_interrupt), sx127x_irq,
+	if (ret = request_irq(gpiod_to_irq(data->gpio_interrupt_timeout), sx127x_irq_timeout,
                       IRQF_TRIGGER_RISING,
-                      "sx127x_Int", data))
+                      "sx127x_Int_timeout", data))
 	{
 		dev_err(&spi->dev, "request_irq failed");	
 
@@ -1277,6 +1328,7 @@ static int sx127x_remove(struct spi_device *spi){
 	device_remove_file(data->chardevice, &dev_attr_codingrate);
 	device_remove_file(data->chardevice, &dev_attr_implicitheadermodeon);
         free_irq(gpiod_to_irq(data->gpio_interrupt),data);
+        free_irq(gpiod_to_irq(data->gpio_interrupt_timeout),data);
 	device_destroy(devclass, data->devt);
 
 	kfifo_free(&data->out);
