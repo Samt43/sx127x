@@ -30,7 +30,7 @@ int setupradio(int fd, enum sx127x_opmode opmode) {
 		return 1;
 	}
 
-	if (ioctl(fd, SX127X_IOCTL_CMD_SETCARRIERFREQUENCY, 868500000) != 0) {
+	if (ioctl(fd, SX127X_IOCTL_CMD_SETCARRIERFREQUENCY, 868000000) != 0) {
 		printf("failed to set carrier frequency\n");
 		return 1;
 	}

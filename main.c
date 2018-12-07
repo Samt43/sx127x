@@ -660,11 +660,18 @@ static int sx127x_setsf(struct sx127x *data, unsigned sf){
 	}
 	sx127x_reg_write(data->spidevice, SX127X_REG_LORA_DETECTOPTIMIZATION, r);
 
-	// set the low data rate bit
-	sx127x_reg_read(data->spidevice, SX127X_REG_LORA_MODEMCONFIG3, &r);
-	r |= SX127X_REG_LORA_MODEMCONFIG3_LOWDATARATEOPTIMIZE;
-	sx127x_reg_write(data->spidevice, SX127X_REG_LORA_MODEMCONFIG3, r);
-	return 0;
+        // Set Config3, AGC auto alway on 
+	if(sf<11)
+        {
+            // agc on// 
+            sx127x_reg_write(data->spidevice, SX127X_REG_LORA_MODEMCONFIG3, 0x04);
+        }	
+        else	
+	{ 
+	   // set the low data rate bit + AGC
+	   sx127x_reg_write(data->spidevice, SX127X_REG_LORA_MODEMCONFIG3, 0x0c);
+        }	
+        return 0;
 }
 
 static ssize_t sx127x_sf_store(struct device *dev, struct device_attribute *attr,
@@ -995,7 +1002,7 @@ static irqreturn_t sx127x_irq(int irq, void *dev_id)
 
 static void sx127x_irq_work_handler(struct work_struct *work){
 	struct sx127x *data = container_of(work, struct sx127x, irq_work);
-	u8 irqflags, buf[128], len, snr, rssi;
+	u8 irqflags, buf[256], len, snr, rssi;
 	u32 fei;
 	struct sx127x_pkt pkt;
 	mutex_lock(&data->mutex);
@@ -1239,8 +1246,6 @@ if (gpiod_direction_output(data->gpio_reset, 0))
 	ret = device_create_file(data->chardevice, &dev_attr_implicitheadermodeon);
 
 
-	sx127x_setmodulation(data,SX127X_MODULATION_LORA);
-	sx127x_setopmode(data,SX127X_OPMODE_RXCONTINUOS,true);	
 	return 0;
 
 	err_sysfs:
@@ -1303,7 +1308,7 @@ static struct spi_driver sx127x_driver = {
 static struct spi_board_info helloWorld_2_spi_device_info = {
 
 		.modalias = SX127X_DRIVERNAME,
-                .max_speed_hz = 500000,
+                .max_speed_hz = 10000000,
                 .bus_num = 1,
 		.chip_select = 0,
                 .mode = SPI_MODE_0,
@@ -1352,7 +1357,7 @@ static int __init sx127x_init(void)
 	}
 
 	spi->chip_select = 0;
-	spi->max_speed_hz = 500000;
+	spi->max_speed_hz = 10000000;
 	spi->mode = SPI_MODE_0;
 	spi->bits_per_word = 8;
 	spi->irq = -1;
